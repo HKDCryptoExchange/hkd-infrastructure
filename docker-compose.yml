@@ -1,0 +1,443 @@
+version: '3.8'
+
+# HKD Exchange - Unified Development Environment
+# This Docker Compose file provides all infrastructure services for local development
+# All microservices (across multiple Claude Code instances) share this environment
+
+services:
+  # ============================================================
+  # PostgreSQL 16 - Primary Database (with Replication)
+  # ============================================================
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: hkd-postgres-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hkd_admin
+      POSTGRES_PASSWORD: hkd_dev_password_2024
+      POSTGRES_DB: hkd_main
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      # Replication settings
+      POSTGRES_REPLICATION_MODE: master
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: replicator_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql/data
+      - ./init-scripts/postgresql:/docker-entrypoint-initdb.d
+    networks:
+      - hkd-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hkd_admin -d hkd_main"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL Replica (for read queries)
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: hkd-postgres-replica
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hkd_admin
+      POSTGRES_PASSWORD: hkd_dev_password_2024
+      POSTGRES_REPLICATION_MODE: slave
+      POSTGRES_MASTER_SERVICE: postgres-primary
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: replicator_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+    networks:
+      - hkd-network
+    depends_on:
+      - postgres-primary
+
+  # ============================================================
+  # TimescaleDB - Time-Series Database (for K-line data)
+  # ============================================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: hkd-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hkd_admin
+      POSTGRES_PASSWORD: hkd_dev_password_2024
+      POSTGRES_DB: hkd_market
+    ports:
+      - "5434:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./init-scripts/timescaledb:/docker-entrypoint-initdb.d
+    networks:
+      - hkd-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hkd_admin -d hkd_market"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis 7.2 - Cache & Session Store (Cluster Mode)
+  # ============================================================
+  redis-node-1:
+    image: redis:7.2-alpine
+    container_name: hkd-redis-1
+    restart: unless-stopped
+    command: redis-server --port 6379 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --requirepass hkd_redis_2024
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+    volumes:
+      - redis-1-data:/data
+    networks:
+      - hkd-network
+
+  redis-node-2:
+    image: redis:7.2-alpine
+    container_name: hkd-redis-2
+    restart: unless-stopped
+    command: redis-server --port 6380 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --requirepass hkd_redis_2024
+    ports:
+      - "6380:6380"
+      - "16380:16380"
+    volumes:
+      - redis-2-data:/data
+    networks:
+      - hkd-network
+
+  redis-node-3:
+    image: redis:7.2-alpine
+    container_name: hkd-redis-3
+    restart: unless-stopped
+    command: redis-server --port 6381 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --requirepass hkd_redis_2024
+    ports:
+      - "6381:6381"
+      - "16381:16381"
+    volumes:
+      - redis-3-data:/data
+    networks:
+      - hkd-network
+
+  # Redis Cluster Init (run once to create cluster)
+  redis-cluster-init:
+    image: redis:7.2-alpine
+    container_name: hkd-redis-cluster-init
+    command: redis-cli --cluster create redis-node-1:6379 redis-node-2:6380 redis-node-3:6381 --cluster-replicas 0 --cluster-yes -a hkd_redis_2024
+    networks:
+      - hkd-network
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+
+  # ============================================================
+  # MongoDB - Audit Logs & Unstructured Data
+  # ============================================================
+  mongodb:
+    image: mongo:7
+    container_name: hkd-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: hkd_admin
+      MONGO_INITDB_ROOT_PASSWORD: hkd_mongo_2024
+      MONGO_INITDB_DATABASE: hkd_audit
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - ./init-scripts/mongodb:/docker-entrypoint-initdb.d
+    networks:
+      - hkd-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/hkd_audit --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Kafka & Zookeeper - Message Queue
+  # ============================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: hkd-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - hkd-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: hkd-kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_NUM_PARTITIONS: 3
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - hkd-network
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Kafka UI for management
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: hkd-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: hkd-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - hkd-network
+    depends_on:
+      - kafka
+
+  # ============================================================
+  # Nacos 2.3 - Service Registry & Config Center
+  # ============================================================
+  nacos:
+    image: nacos/nacos-server:v2.3.0
+    container_name: hkd-nacos
+    restart: unless-stopped
+    environment:
+      MODE: standalone
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: mysql-nacos
+      MYSQL_SERVICE_PORT: 3306
+      MYSQL_SERVICE_DB_NAME: nacos_config
+      MYSQL_SERVICE_USER: nacos
+      MYSQL_SERVICE_PASSWORD: nacos_password
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_TOKEN: SecretKey012345678901234567890123456789012345678901234567890123456789
+      NACOS_AUTH_IDENTITY_KEY: nacos
+      NACOS_AUTH_IDENTITY_VALUE: nacos
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    volumes:
+      - nacos-logs:/home/nacos/logs
+    networks:
+      - hkd-network
+    depends_on:
+      - mysql-nacos
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # MySQL for Nacos (Nacos requires MySQL for persistence)
+  mysql-nacos:
+    image: mysql:8.0
+    container_name: hkd-mysql-nacos
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: nacos_config
+      MYSQL_USER: nacos
+      MYSQL_PASSWORD: nacos_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-nacos-data:/var/lib/mysql
+      - ./init-scripts/mysql-nacos:/docker-entrypoint-initdb.d
+    networks:
+      - hkd-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "nacos", "-pnacos_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Seata Server - Distributed Transaction Coordinator
+  # ============================================================
+  seata-server:
+    image: seataio/seata-server:2.0.0
+    container_name: hkd-seata-server
+    restart: unless-stopped
+    environment:
+      SEATA_PORT: 8091
+      STORE_MODE: db
+      SEATA_IP: seata-server
+      SEATA_CONFIG_NAME: file:/seata-server/resources/application
+    ports:
+      - "8091:8091"
+      - "7091:7091"
+    volumes:
+      - ./config/seata:/seata-server/resources
+    networks:
+      - hkd-network
+    depends_on:
+      - mysql-nacos
+
+  # ============================================================
+  # Prometheus - Metrics Collection
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hkd-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - hkd-network
+
+  # ============================================================
+  # Grafana - Monitoring Dashboards
+  # ============================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hkd-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: hkd_grafana_2024
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - hkd-network
+    depends_on:
+      - prometheus
+
+  # ============================================================
+  # Skywalking OAP Server - APM (Application Performance Monitoring)
+  # ============================================================
+  skywalking-oap:
+    image: apache/skywalking-oap-server:9.6.0
+    container_name: hkd-skywalking-oap
+    restart: unless-stopped
+    environment:
+      SW_STORAGE: postgresql
+      SW_JDBC_URL: jdbc:postgresql://postgres-primary:5432/skywalking
+      SW_DATA_SOURCE_USER: hkd_admin
+      SW_DATA_SOURCE_PASSWORD: hkd_dev_password_2024
+    ports:
+      - "11800:11800"
+      - "12800:12800"
+    networks:
+      - hkd-network
+    depends_on:
+      - postgres-primary
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:12800/graphql || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Skywalking UI
+  skywalking-ui:
+    image: apache/skywalking-ui:9.6.0
+    container_name: hkd-skywalking-ui
+    restart: unless-stopped
+    environment:
+      SW_OAP_ADDRESS: http://skywalking-oap:12800
+    ports:
+      - "8082:8080"
+    networks:
+      - hkd-network
+    depends_on:
+      - skywalking-oap
+
+  # ============================================================
+  # Nginx - Reverse Proxy (Optional, for unified API gateway in dev)
+  # ============================================================
+  nginx:
+    image: nginx:alpine
+    container_name: hkd-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - hkd-network
+
+  # ============================================================
+  # Adminer - Database Management UI (Optional)
+  # ============================================================
+  adminer:
+    image: adminer:latest
+    container_name: hkd-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres-primary
+    networks:
+      - hkd-network
+
+# ============================================================
+# Volumes - Persistent Data Storage
+# ============================================================
+volumes:
+  postgres-primary-data:
+  postgres-replica-data:
+  timescaledb-data:
+  redis-1-data:
+  redis-2-data:
+  redis-3-data:
+  mongodb-data:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-logs:
+  nacos-logs:
+  mysql-nacos-data:
+  prometheus-data:
+  grafana-data:
+
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  hkd-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

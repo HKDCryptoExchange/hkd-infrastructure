@@ -1,0 +1,187 @@
+# HKD Exchange - Prometheus Configuration
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'hkd-dev'
+    environment: 'development'
+
+# Alertmanager configuration (optional, can be added later)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # PostgreSQL Exporter (can be added later)
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+
+  # Redis Exporter (can be added later)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+  # Kafka Exporter (can be added later)
+  # - job_name: 'kafka'
+  #   static_configs:
+  #     - targets: ['kafka-exporter:9308']
+
+  # HKD Microservices - User Domain
+  - job_name: 'hkd-user-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8001']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'user-service'
+
+  - job_name: 'hkd-kyc-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8003']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'kyc-service'
+
+  - job_name: 'hkd-auth-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8013']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'auth-service'
+
+  # HKD Microservices - Asset Domain
+  - job_name: 'hkd-account-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8002']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'account-service'
+
+  - job_name: 'hkd-wallet-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8008']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'wallet-service'
+
+  - job_name: 'hkd-deposit-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8005']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'deposit-service'
+
+  - job_name: 'hkd-withdraw-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8006']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'withdraw-service'
+
+  - job_name: 'hkd-asset-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8004']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'asset-service'
+
+  # HKD Microservices - Trading Domain
+  - job_name: 'hkd-order-gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8100']  # Go service, adjust port as needed
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'order-gateway'
+
+  - job_name: 'hkd-settlement-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8101']  # Go service, adjust port as needed
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'settlement-service'
+
+  # HKD Microservices - Market Domain
+  - job_name: 'hkd-market-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8010']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'market-service'
+
+  # HKD Microservices - Risk Domain
+  - job_name: 'hkd-risk-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8011']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'risk-service'
+
+  - job_name: 'hkd-ml-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:5000']  # Python Flask service
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'ml-service'
+
+  # HKD Microservices - Infrastructure
+  - job_name: 'hkd-gateway-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'gateway-service'
+
+  - job_name: 'hkd-notify-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8007']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'notify-service'
+
+  - job_name: 'hkd-admin-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8012']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'admin-service'
